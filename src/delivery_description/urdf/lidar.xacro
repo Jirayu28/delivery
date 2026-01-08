@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- uses D2R from utils.xacro -->
+  <xacro:macro name="lidar" params="lidar_x lidar_y lidar_z lidar_roll_deg lidar_pitch_deg lidar_yaw_deg">
+    <link name="lidar_link"/>
+
+    <joint name="base_to_lidar" type="fixed">
+      <parent link="base_link"/>
+      <child link="lidar_link"/>
+      <origin
+        xyz="${lidar_x} ${lidar_y} ${lidar_z}"
+        rpy="${lidar_roll_deg*D2R} ${lidar_pitch_deg*D2R} ${lidar_yaw_deg*D2R}"/>
+    </joint>
+  </xacro:macro>
+
+</robot>
