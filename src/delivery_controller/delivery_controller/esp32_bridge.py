@@ -30,7 +30,7 @@ class ESP32Bridge(Node):
         # ----------------------------
         # Parameters
         # ----------------------------
-        self.declare_parameter('port', '/dev/ttyUSB0')
+        self.declare_parameter('port', '/dev/ttyUSB2')
         self.declare_parameter('baud', 115200)
         self.declare_parameter('cmd_timeout', 0.5)     # วินาที
         self.declare_parameter('tx_rate', 20.0)        # Hz ส่งลง ESP32
@@ -38,13 +38,15 @@ class ESP32Bridge(Node):
         self.declare_parameter('max_w', 3.0)           # rad/s clamp
 
         self.declare_parameter('wheel_r', 0.033)       # เมตร
-        self.declare_parameter('wheel_base', 0.20)     # เมตร
-        self.declare_parameter('cprL', 901.0)          # counts per rev
-        self.declare_parameter('cprR', 808.0)
+        self.declare_parameter('wheel_base', 0.314)     # เมตร
+        self.declare_parameter('cprL', 989.2)          # counts per rev
+        self.declare_parameter('cprR', 989.2)
+        self.declare_parameter('ticks_per_m_L', 4860.0)
+        self.declare_parameter('ticks_per_m_R', 4860.0)
 
         self.declare_parameter('frame_odom', 'odom')
-        self.declare_parameter('frame_base', 'base_link')
-        self.declare_parameter('publish_tf', True)
+        self.declare_parameter('frame_base', 'base_footprint')
+        self.declare_parameter('publish_tf', True)  # ปิด tf ของ odom ตอนใช้จริง
 
         self.declare_parameter('log_tx', True)         # log TX
         self.declare_parameter('log_esp', True)        # log non-encoder lines from ESP32
@@ -60,6 +62,10 @@ class ESP32Bridge(Node):
         self.wheel_base = float(self.get_parameter('wheel_base').value)
         self.cprL = float(self.get_parameter('cprL').value)
         self.cprR = float(self.get_parameter('cprR').value)
+        self.ticks_per_m_L = float(self.get_parameter('ticks_per_m_L').value)
+        self.ticks_per_m_R = float(self.get_parameter('ticks_per_m_R').value)
+        self._warned_ticks = False
+        self._warned_base = False
 
         self.frame_odom = self.get_parameter('frame_odom').value
         self.frame_base = self.get_parameter('frame_base').value
@@ -115,7 +121,7 @@ class ESP32Bridge(Node):
 
         self.get_logger().info(
             f"ESP32Bridge ready. port={self.port} baud={self.baud} "
-            f"wheel_r={self.wheel_r} wheel_base={self.wheel_base} cprL={self.cprL} cprR={self.cprR}"
+            f"wheel_base={self.wheel_base} ticks_per_m_L={self.ticks_per_m_L} ticks_per_m_R={self.ticks_per_m_R}"
         )
 
     # ----------------------------
@@ -219,8 +225,34 @@ class ESP32Bridge(Node):
 
         dt_ms = t_ms - self._last_enc_ms
         if dt_ms <= 0:
-            return
+            # รีเซ็ตให้ sync ใหม่
+            self._last_enc_ms = t_ms
+            self._last_countL = cL
+            self._last_countR = cR
+            return  # ข้ามถ้าเวลาไม่เพิ่ม
         dt = dt_ms / 1000.0
+        if dt > 0.5:
+            self._last_enc_ms = t_ms
+            self._last_countL = cL
+            self._last_countR = cR
+            return  # ข้ามถ้านานเกินไป
+
+        
+        if self.ticks_per_m_L <= 0.0 or self.ticks_per_m_R <= 0.0:
+            if not self._warned_ticks:
+                self.get_logger().warn("ticks_per_m is <= 0, check parameters!")
+                self._warned_ticks = True
+            return
+        else:
+            self._warned_ticks = False
+        
+        if self.wheel_base <= 0.0:
+            if not self._warned_base:
+                self.get_logger().warn("wheel_base is <= 0, check parameters!")
+                self._warned_base = True
+            return
+        else:
+            self._warned_base = False
 
         dL = cL - self._last_countL
         dR = cR - self._last_countR
@@ -230,16 +262,26 @@ class ESP32Bridge(Node):
         self._last_countR = cR
 
         # counts -> meters
-        distL = (float(dL) / self.cprL) * (2.0 * math.pi * self.wheel_r)
-        distR = (float(dR) / self.cprR) * (2.0 * math.pi * self.wheel_r)
+        # ticks -> meters (ใช้ค่าที่คาลิเบรตมา)
+        distL = float(dL) / self.ticks_per_m_L
+        distR = float(dR) / self.ticks_per_m_R
 
         v = (distR + distL) * 0.5 / dt
         w = (distR - distL) / self.wheel_base / dt
 
+        # ✅ deadband กันสั่น/กัน drift ตอนหยุด (ปรับค่าได้)
+        if abs(v) < 1e-3:
+            v = 0.0
+        if abs(w) < 1e-3:
+            w = 0.0
+
         # integrate pose
-        self._yaw += w * dt
-        self._x += v * math.cos(self._yaw) * dt
-        self._y += v * math.sin(self._yaw) * dt
+        dtheta = w * dt
+        yaw_mid = self._yaw + 0.5 * dtheta
+        self._x += v * math.cos(yaw_mid) * dt
+        self._y += v * math.sin(yaw_mid) * dt
+        self._yaw += dtheta
+        self._yaw = math.atan2(math.sin(self._yaw), math.cos(self._yaw))
 
         odom = Odometry()
         odom.header.stamp = now.to_msg()

@@ -1,0 +1,11 @@
+esp32_bridge:
+  ros__parameters:
+    port: /dev/ttyUSB2
+    baud: 115200
+    wheel_r: 0.033
+    wheel_base: 0.20
+    cprL: 901.0
+    cprR: 808.0
+    publish_tf: false   # ✅ ให้ EKF เป็นคนปล่อย TF
+    frame_odom: odom
+    frame_base: base_footprint

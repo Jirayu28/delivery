@@ -2,7 +2,7 @@ import os
 from glob import glob
 from setuptools import setup, find_packages
 
-package_name = 'delivery_bringup'
+package_name = 'delivery_startup'
 
 setup(
     name=package_name,
@@ -12,12 +12,12 @@ setup(
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
-        (os.path.join('share', package_name, 'config'), glob('config/*')),
+        (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='jirayu',
     maintainer_email='jirayu.pkd@gmail.com',
-    description='Bringup launch files for delivery robot',
+    description='Start all nodes for delivery robot',
     license='Apache-2.0',
 )
