@@ -10,6 +10,8 @@ from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from tf2_ros import TransformBroadcaster
 from geometry_msgs.msg import TransformStamped
+from std_msgs.msg import Empty
+
 
 import serial
 
@@ -38,9 +40,11 @@ class ESP32Bridge(Node):
         self.declare_parameter('max_w', 3.0)           # rad/s clamp
 
         self.declare_parameter('wheel_r', 0.033)       # เมตร
-        self.declare_parameter('wheel_base', 0.20)     # เมตร
-        self.declare_parameter('cprL', 901.0)          # counts per rev
-        self.declare_parameter('cprR', 808.0)
+        self.declare_parameter('wheel_base', 0.314)     # เมตร
+        self.declare_parameter('cprL', 989.2)          # counts per rev
+        self.declare_parameter('cprR', 989.2)
+        self.declare_parameter('ticks_per_m_L', 4860.0)
+        self.declare_parameter('ticks_per_m_R', 4860.0)
 
         self.declare_parameter('frame_odom', 'odom')
         self.declare_parameter('frame_base', 'base_link')
@@ -60,6 +64,8 @@ class ESP32Bridge(Node):
         self.wheel_base = float(self.get_parameter('wheel_base').value)
         self.cprL = float(self.get_parameter('cprL').value)
         self.cprR = float(self.get_parameter('cprR').value)
+        self.ticks_per_m_L = float(self.get_parameter('ticks_per_m_L').value)
+        self.ticks_per_m_R = float(self.get_parameter('ticks_per_m_R').value)
 
         self.frame_odom = self.get_parameter('frame_odom').value
         self.frame_base = self.get_parameter('frame_base').value
@@ -73,6 +79,7 @@ class ESP32Bridge(Node):
         # ----------------------------
         self.sub_cmd = self.create_subscription(Twist, '/cmd_vel', self.cb_cmd_vel, 10)
         self.pub_odom = self.create_publisher(Odometry, '/odom', 10)
+        self.sub_reset = self.create_subscription(Empty, '/reset_odom', self.cb_reset_odom, 10)
         self.tf_br = TransformBroadcaster(self) if self.publish_tf else None
 
         # ----------------------------
@@ -82,6 +89,8 @@ class ESP32Bridge(Node):
         self._last_cmd_time = 0.0
         self._cmd_v = 0.0
         self._cmd_w = 0.0
+        
+
 
         # ✅ สำคัญ: กัน stopv spam + กันส่งซ้ำเดิม ๆ
         self._stopped = True          # เริ่มต้นถือว่า "หยุด"
@@ -105,6 +114,7 @@ class ESP32Bridge(Node):
         self.ser = None
         self._rx_thread = None
         self._rx_stop = False
+        self._need_sync = True
 
         # Open serial
         self._open_serial()
@@ -151,9 +161,7 @@ class ESP32Bridge(Node):
             except Exception:
                 pass
 
-            # บางบอร์ดเปิดพอร์ตแล้วรีเซ็ต -> รอหน่อย
             time.sleep(0.2)
-
             self.get_logger().info(f"Opened serial: {self.port} @ {self.baud}")
 
         except Exception as e:
@@ -165,11 +173,31 @@ class ESP32Bridge(Node):
         self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
         self._rx_thread.start()
 
-        # กันมอเตอร์กระชากตอนเริ่ม
+        # ✅ กันมอเตอร์กระชากตอนเริ่ม
         self._send_line("stopv")
-        self._stopped = True
-        self._last_tx = "stopv"
-        self._last_stop_sent = time.time()
+        time.sleep(0.05)
+
+        # ✅ รีเซ็ต encoder/odom ที่ ESP32 ทุกครั้งที่ bridge เริ่ม
+        self._send_line("z")
+
+        with self._lock:
+            # รีเซ็ต state ฝั่ง ROS + encoder sync พร้อมกันใน lock เดียว
+            self._x = 0.0
+            self._y = 0.0
+            self._yaw = 0.0
+
+            self._need_sync = True
+            self._last_enc_ms = None
+            self._last_countL = None
+            self._last_countR = None
+
+        time.sleep(0.10)
+
+        # ✅ reset TX state
+        with self._lock:
+            self._stopped = True
+            self._last_tx = "stopv"
+            self._last_stop_sent = time.time()
 
     def _rx_loop(self):
         buf = b""
@@ -192,7 +220,6 @@ class ESP32Bridge(Node):
                 time.sleep(0.2)
 
     def _handle_esp_line(self, s: str):
-        # Encoder: "E <ms> <countL> <countR>"
         if s.startswith("E "):
             parts = s.split()
             if len(parts) >= 4:
@@ -208,50 +235,74 @@ class ESP32Bridge(Node):
         if self.log_esp:
             self.get_logger().info(f"ESP32: {s}")
 
+
     def _on_encoder(self, t_ms: int, cL: int, cR: int):
         now = self.get_clock().now()
 
-        if self._last_enc_ms is None:
+        # ---------- state update (lock) ----------
+        with self._lock:
+            if self._need_sync:
+                self._last_enc_ms = t_ms
+                self._last_countL = cL
+                self._last_countR = cR
+                self._need_sync = False
+                return
+
+            if self._last_enc_ms is None:
+                self._last_enc_ms = t_ms
+                self._last_countL = cL
+                self._last_countR = cR
+                return
+
+            dt_ms = t_ms - self._last_enc_ms
+            if dt_ms <= 0:
+                return
+
+            dt = dt_ms / 1000.0
+            dL = cL - self._last_countL
+            dR = cR - self._last_countR
+
             self._last_enc_ms = t_ms
             self._last_countL = cL
             self._last_countR = cR
-            return
 
-        dt_ms = t_ms - self._last_enc_ms
-        if dt_ms <= 0:
-            return
-        dt = dt_ms / 1000.0
-
-        dL = cL - self._last_countL
-        dR = cR - self._last_countR
-
-        self._last_enc_ms = t_ms
-        self._last_countL = cL
-        self._last_countR = cR
-
-        # counts -> meters
-        distL = (float(dL) / self.cprL) * (2.0 * math.pi * self.wheel_r)
-        distR = (float(dR) / self.cprR) * (2.0 * math.pi * self.wheel_r)
-
+        # ---------- compute (no lock) ----------
+        distL = float(dL) / self.ticks_per_m_L
+        distR = float(dR) / self.ticks_per_m_R
         v = (distR + distL) * 0.5 / dt
         w = (distR - distL) / self.wheel_base / dt
 
-        # integrate pose
-        self._yaw += w * dt
-        self._x += v * math.cos(self._yaw) * dt
-        self._y += v * math.sin(self._yaw) * dt
+        # ---------- integrate pose (lock) ----------
+        with self._lock:
+            yaw_mid = self._yaw + (w * dt * 0.5)
+            self._x += v * math.cos(yaw_mid) * dt
+            self._y += v * math.sin(yaw_mid) * dt
+            self._yaw += w * dt
+            self._yaw = self._wrap_pi(self._yaw)   # <- wrap ตรงนี้
 
+            x, y, yaw = self._x, self._y, self._yaw  # <- ต้องมี!
+
+
+        # ---------- publish (no lock) ----------
         odom = Odometry()
         odom.header.stamp = now.to_msg()
         odom.header.frame_id = self.frame_odom
         odom.child_frame_id = self.frame_base
-        odom.pose.pose.position.x = self._x
-        odom.pose.pose.position.y = self._y
+        odom.pose.pose.position.x = x
+        odom.pose.pose.position.y = y
         odom.pose.pose.position.z = 0.0
-        qz = math.sin(self._yaw * 0.5)
-        qw = math.cos(self._yaw * 0.5)
-        odom.pose.pose.orientation.z = qz
-        odom.pose.pose.orientation.w = qw
+
+        odom.pose.pose.orientation.x = 0.0
+        odom.pose.pose.orientation.y = 0.0
+        odom.pose.pose.orientation.z = math.sin(yaw * 0.5)
+        odom.pose.pose.orientation.w = math.cos(yaw * 0.5)
+
+        odom.twist.twist.linear.y = 0.0
+        odom.twist.twist.linear.z = 0.0
+        odom.twist.twist.angular.x = 0.0
+        odom.twist.twist.angular.y = 0.0
+
+        
         odom.twist.twist.linear.x = v
         odom.twist.twist.angular.z = w
         self.pub_odom.publish(odom)
@@ -261,11 +312,16 @@ class ESP32Bridge(Node):
             t.header.stamp = now.to_msg()
             t.header.frame_id = self.frame_odom
             t.child_frame_id = self.frame_base
-            t.transform.translation.x = self._x
-            t.transform.translation.y = self._y
+            t.transform.translation.x = x
+            t.transform.translation.y = y
             t.transform.translation.z = 0.0
-            t.transform.rotation.z = qz
-            t.transform.rotation.w = qw
+
+            # ✅ เพิ่มให้ครบ
+            t.transform.rotation.x = 0.0
+            t.transform.rotation.y = 0.0
+            t.transform.rotation.z = math.sin(yaw * 0.5)
+            t.transform.rotation.w = math.cos(yaw * 0.5)
+
             self.tf_br.sendTransform(t)
 
     # ----------------------------
@@ -275,32 +331,36 @@ class ESP32Bridge(Node):
         if self.ser is None:
             return
 
+        now = time.time()
+
         with self._lock:
             v = self._cmd_v
             w = self._cmd_w
             t_last = self._last_cmd_time
+            last_tx = self._last_tx
+            stopped = self._stopped
+            last_stop_sent = self._last_stop_sent
 
-        now = time.time()
         timed_out = (t_last == 0.0) or ((now - t_last) > self.cmd_timeout)
 
-        # ถ้า timeout หรือสั่ง (0,0) -> stopv (ส่ง "ครั้งเดียว" และกันถี่)
         if timed_out or (abs(v) < 1e-3 and abs(w) < 1e-3):
-            if (not self._stopped) and ((now - self._last_stop_sent) > 0.15):
+            if (not stopped) and ((now - last_stop_sent) > 0.15):
                 self._send_line("stopv")
-                self._stopped = True
-                self._last_tx = "stopv"
-                self._last_stop_sent = now
+                with self._lock:
+                    self._stopped = True
+                    self._last_tx = "stopv"
+                    self._last_stop_sent = now
             return
 
-        # มีคำสั่ง -> ส่ง v w (หน่วย m/s, rad/s)
         cmd = f"v {v:.3f} {w:.3f}"
 
-        # กันส่งซ้ำเดิม ๆ (ช่วยลด spam log)
-        if cmd != self._last_tx:
+        if cmd != last_tx:
             self._send_line(cmd)
-            self._last_tx = cmd
+            with self._lock:
+                self._last_tx = cmd
 
-        self._stopped = False
+        with self._lock:
+            self._stopped = False
 
     def _send_line(self, s: str):
         try:
@@ -335,6 +395,40 @@ class ESP32Bridge(Node):
 
         super().destroy_node()
 
+    def cb_reset_odom(self, msg: Empty):
+        with self._lock:
+            self._cmd_v = 0.0
+            self._cmd_w = 0.0
+            self._last_cmd_time = 0.0
+
+            self._x = 0.0
+            self._y = 0.0
+            self._yaw = 0.0
+            self._last_enc_ms = None
+            self._last_countL = None
+            self._last_countR = None
+            self._need_sync = True
+
+            self._stopped = True
+            self._last_tx = "stopv"
+            self._last_stop_sent = time.time()
+
+        self._send_line("stopv")
+        time.sleep(0.02)
+        self._send_line("z")
+        with self._lock:
+            self._need_sync = True
+            self._last_enc_ms = None
+            self._last_countL = None
+            self._last_countR = None
+        self.get_logger().warn("RESET_ODOM: sent stopv + z, cleared ROS odom state.")
+
+    def _wrap_pi(self, a: float) -> float:
+        while a > math.pi:
+            a -= 2.0 * math.pi
+        while a < -math.pi:
+            a += 2.0 * math.pi
+        return a
 
 def main(args=None):
     rclpy.init(args=args)

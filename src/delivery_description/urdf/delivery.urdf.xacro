@@ -23,9 +23,18 @@
   <xacro:include filename="$(find delivery_description)/urdf/base.xacro"/>
   <xacro:include filename="$(find delivery_description)/urdf/wheels.xacro"/>
   <xacro:include filename="$(find delivery_description)/urdf/lidar.xacro"/>
+  <xacro:include filename="$(find delivery_description)/urdf/imu.xacro"/>
 
   <!-- call macros -->
   <xacro:base/>
+
+    <!-- ✅ IMU TF: เรียกหลัง base_link ถูกสร้างแล้ว -->
+  <xacro:add_imu
+    parent="base_link"
+    imu_name="bno055"
+    xyz="0.10 0.00 0.08"
+    rpy="0 0 0"/>
+
   <xacro:wheels wheel_y="${wheel_y}" wheel_radius="${wheel_radius}"/>
   <xacro:lidar
     lidar_x="${lidar_x}" lidar_y="${lidar_y}" lidar_z="${lidar_z}"
