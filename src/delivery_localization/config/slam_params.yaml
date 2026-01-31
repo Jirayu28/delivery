@@ -9,7 +9,7 @@ slam_toolbox:
 
     max_laser_range: 6.0
 
-    throttle_scans: 3
+    throttle_scans: 1
     transform_timeout: 0.2
     tf_buffer_duration: 30.0
 
@@ -17,9 +17,9 @@ slam_toolbox:
 
     resolution: 0.04          # เริ่มนิ่งก่อน แล้วค่อยลดเป็น 0.03
 
-    minimum_time_interval: 0.20
-    minimum_travel_distance: 0.06
-    minimum_travel_heading: 0.06   # ~4.5°
+    minimum_time_interval: 0.10
+    minimum_travel_distance: 0.03
+    minimum_travel_heading: 0.03   # ~4.5°
 
     use_scan_matching: true
     use_smoothing: true

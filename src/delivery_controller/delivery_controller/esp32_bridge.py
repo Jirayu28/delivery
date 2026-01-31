@@ -32,7 +32,7 @@ class ESP32Bridge(Node):
         # ----------------------------
         # Parameters
         # ----------------------------
-        self.declare_parameter('port', '/dev/ttyUSB0')
+        self.declare_parameter('port', '/dev/ttyAMA0')
         self.declare_parameter('baud', 115200)
         self.declare_parameter('cmd_timeout', 0.5)     # วินาที
         self.declare_parameter('tx_rate', 20.0)        # Hz ส่งลง ESP32

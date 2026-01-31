@@ -41,20 +41,27 @@ ros2 launch slam_toolbox online_async_launch.py   slam_params_file:=/home/jirayu
 cd ros2_ws/
 source install/setup.bash 
 
-# ต่อไปเวลาแก้โค้ดแล้ว push branch นี้
-git branch
-git add .
-git commit -m "your message"
-git push
+cd ~/ros2_ws
+colcon build --symlink-install
+source install/setup.bash
+
 
 # URDF
 ros2 launch delivery_description description.launch.py
 # ปิด GUI (ตอนใช้งานจริง / ไม่มีจอ)
 ros2 launch delivery_description description.launch.py use_gui:=false
 
+ros2 launch delivery_description description.launch.py use_gui:=false use_rviz:=false
+
+
+cd ros2_ws/
+source install/setup.bash 
 
 # esp32
 ros2 run delivery_controller esp32_bridge --ros-args -p port:=/dev/ttyAMA0 -p baud:=115200
+
+# ปิด tf Odom ตอนใช้จริง กันชนกับ efk
+ros2 run delivery_controller esp32_bridge --ros-args -p publish_tf:=false
 
 # imu
 ros2 launch bno055 bno055.launch.py
@@ -70,3 +77,37 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard
 
 # slam
 ros2 launch slam_toolbox online_async_launch.py   slam_params_file:=/home/jirayu/ros2_ws/src/delivery_localization/config/slam_params.yaml
+
+
+# save map
+ros2 run nav2_map_server map_saver_cli \ -f ~/ros2_ws/src/delivery_navigation/maps/office_map \ --ros-args -p map_topic:=/map -p map_subscribe_transient_local:=true -p save_map_timeout:=10.0
+
+# run map
+ros2 launch delivery_navigation navigation.launch.py
+
+ros2 launch delivery_navigation navigation.launch.py \
+  map:=/home/delivery/ros2_ws/src/delivery_navigation/maps/office_map.yaml \
+  params_file:=/home/delivery/ros2_ws/src/delivery_navigation/config/nav2_params.yaml
+
+# เปิดภาพแมพได้
+ros2 launch nav2_bringup localization_launch.py   map:=/home/delivery/ros2_ws/src/delivery_navigation/maps/office_map.yaml   params_file:=/home/delivery/ros2_ws/src/delivery_navigation/config/nav2_params.yaml   use_sim_time:=false
+
+# เหมือนคำสั่งที่คุณทำแล้วแมพขึ้น
+ros2 launch delivery_navigation navigation.launch.py \
+  mode:=localization \
+  map:=/home/delivery/ros2_ws/src/delivery_navigation/maps/office_map.yaml \
+  params_file:=/home/delivery/ros2_ws/src/delivery_navigation/config/nav2_params.yaml \
+  use_sim_time:=false
+
+# ใช้ Nav2Goal (ต้องเป็น full navigation)
+ros2 launch delivery_navigation navigation.launch.py \
+  mode:=navigation \
+  map:=/home/delivery/ros2_ws/src/delivery_navigation/maps/office_map.yaml \
+  params_file:=/home/delivery/ros2_ws/src/delivery_navigation/config/nav2_params.yaml \
+  use_sim_time:=false
+
+# ..........
+ros2 launch delivery_navigation navigation_launch.py \
+  mode:=navigation \
+  map:=/home/delivery/ros2_ws/src/delivery_navigation/maps/office_map.yaml \
+  params_file:=/home/delivery/ros2_ws/src/delivery_navigation/config/nav2_params.yaml
