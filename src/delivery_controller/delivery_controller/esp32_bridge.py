@@ -12,9 +12,7 @@ from tf2_ros import TransformBroadcaster
 from geometry_msgs.msg import TransformStamped
 from std_msgs.msg import Empty
 
-
 import serial
-
 
 class ESP32Bridge(Node):
     """
@@ -40,18 +38,18 @@ class ESP32Bridge(Node):
         self.declare_parameter('max_w', 3.0)           # rad/s clamp
 
         self.declare_parameter('wheel_r', 0.033)       # เมตร
-        self.declare_parameter('wheel_base', 0.314)     # เมตร
+        self.declare_parameter('wheel_base', 0.355)     # เมตร
         self.declare_parameter('cprL', 989.2)          # counts per rev
         self.declare_parameter('cprR', 989.2)
         self.declare_parameter('ticks_per_m_L', 4860.0)
         self.declare_parameter('ticks_per_m_R', 4860.0)
 
         self.declare_parameter('frame_odom', 'odom')
-        self.declare_parameter('frame_base', 'base_link')
-        self.declare_parameter('publish_tf', True)
+        self.declare_parameter('frame_base', 'base_footprint')
+        self.declare_parameter('publish_tf', False)
 
-        self.declare_parameter('log_tx', True)         # log TX
-        self.declare_parameter('log_esp', True)        # log non-encoder lines from ESP32
+        self.declare_parameter('log_tx', False)         # log TX
+        self.declare_parameter('log_esp', False)        # log non-encoder lines from ESP32
 
         self.port = self.get_parameter('port').value
         self.baud = int(self.get_parameter('baud').value)
