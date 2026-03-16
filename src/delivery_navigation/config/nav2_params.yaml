@@ -51,8 +51,8 @@ bt_navigator:
   ros__parameters:
     use_sim_time: false
     global_frame: map
-    robot_base_frame: "base_footprint"
-    odom_topic: "odom"
+    robot_base_frame: base_footprint
+    odom_topic: /odom
     bt_loop_duration: 10
     default_server_timeout: 20
     wait_for_service_timeout: 1000
@@ -78,64 +78,231 @@ bt_navigator:
 
 controller_server:
   ros__parameters:
-    use_sim_time: false
-    controller_frequency: 20.0
-    costmap_update_timeout: 0.30
-    min_x_velocity_threshold: 0.05
-    min_y_velocity_threshold: 0.0
-    min_theta_velocity_threshold: 0.1
-    failure_tolerance: 0.3
-    progress_checker_plugins: ["progress_checker"]
-    goal_checker_plugins: ["general_goal_checker"] # "precise_goal_checker"
-    controller_plugins: ["FollowPath"]
-    use_realtime_priority: false
+    use_sim_time: True  # ใช้เวลา /clock จาก simulation
+                         # ถ้าใช้หุ่นจริงให้เปลี่ยนเป็น false
 
-    # Progress checker parameters
+    controller_frequency: 20.0  # ความถี่ที่ controller server คำนวณคำสั่ง /cmd_vel
+                                # 20 Hz = คำนวณ 20 ครั้งต่อวินาที
+
+    min_x_velocity_threshold: 0.001      # ถ้าความเร็วแกน X จาก odom มีค่าน้อยกว่านี้
+                                         # จะถูกมองว่าเป็น 0.0 เพื่อตัด noise เล็กๆ
+                                         # X คือเดินหน้า/ถอยหลัง
+
+    min_y_velocity_threshold: 0.5        # threshold ของแกน Y
+                                         # สำหรับหุ่น differential มักไม่ได้ใช้การไถข้าง
+                                         # เลยตั้งสูงไว้เพื่อตัดค่าแกน Y ทิ้งไปเลย
+
+    min_theta_velocity_threshold: 0.001  # ถ้าความเร็วเชิงมุมจาก odom ต่ำกว่านี้
+                                         # จะถือว่าไม่หมุน เพื่อตัด noise ตอนหยุดนิ่ง
+
+    failure_tolerance: 0.3               # controller server ยอมให้มีความผิดพลาดชั่วคราว
+                                         # ช่วงสั้นๆ ก่อนจะถือว่าล้มเหลว
+                                         # ช่วยลดการ fail ทันทีจากอาการสะดุดสั้นๆ ของระบบ
+
+    progress_checker_plugins: ["progress_checker"]  # รายชื่อ progress checker ที่จะใช้
+    goal_checker_plugins: ["goal_checker"]          # รายชื่อ goal checker ที่จะใช้
+    controller_plugins: ["FollowPath"]             # รายชื่อ controller plugin ที่จะใช้จริง
+
+    # -----------------------------
+    # Progress checker
+    # -----------------------------
     progress_checker:
-      plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 0.5
-      movement_time_allowance: 900.0
-    # Goal checker parameters
-    #precise_goal_checker:
-    #  plugin: "nav2_controller::SimpleGoalChecker"
-    #  xy_goal_tolerance: 0.25
-    #  yaw_goal_tolerance: 0.25
-    #  stateful: True
-    general_goal_checker:
-      stateful: True
-      plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.25
-      yaw_goal_tolerance: 6.28
+      plugin: "nav2_controller::SimpleProgressChecker"  # ตัวตรวจว่าหุ่นยัง "มีความคืบหน้า" อยู่ไหม
 
-    # Regulated Pure Pursuit parameters
+      required_movement_radius: 0.5   # หุ่นต้องขยับได้อย่างน้อย 0.5 m
+                                      # จึงจะถือว่ามี progress
+
+      movement_time_allowance: 10.0   # ถ้าภายใน 10 วินาที ขยับไม่ถึงระยะด้านบน
+                                      # progress checker จะมองว่าหุ่นติด/ไม่คืบหน้า
+
+    # -----------------------------
+    # Goal checker
+    # -----------------------------
+    goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"  # ตัวตรวจว่าถึง goal แล้วหรือยัง
+
+      xy_goal_tolerance: 0.25    # อนุญาตให้ตำแหน่งคลาดเคลื่อนจาก goal ได้ 0.25 m
+                                 # ถ้าเข้าใกล้ในระยะนี้ถือว่าถึงในเชิงตำแหน่ง
+
+      yaw_goal_tolerance: 0.25   # อนุญาตให้มุมคลาดเคลื่อนได้ 0.25 rad (~14.3 deg)
+                                 # ถ้ามุมต่างจาก goal ไม่เกินนี้ถือว่าถึงในเชิงทิศทาง
+
+      stateful: true             # เมื่อเข้าใกล้เป้าหมายแล้ว จะเช็ก goal แบบมี state
+                                 # ช่วยให้การเช็ก goal ปลายทางนิ่งขึ้น
+
+    # -----------------------------
+    # Rotation Shim + RPP
+    # -----------------------------
     FollowPath:
-      plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
-      desired_linear_vel: 0.7                             #ความเร็วเชิงเส้น m/s
-      lookahead_dist: 1.0                                 #ระยะที่มองไปข้างหน้า m
-      use_velocity_scaled_lookahead_dist: true           #ใช้การปรับขนาดระยะที่มองไปข้างหน้าตามความเร็วของ robot หรือไม่
-      min_lookahead_dist: 0.5                             #ระยะที่มองไปข้างหน้าต่ำสุด m
-      max_lookahead_dist: 1.5                             #ระยะที่มองไปข้างหน้าสูงสุด m
-      lookahead_time: 3.0                                 #เวลาที่มองไปข้างหน้า s
-      rotate_to_heading_angular_vel: 1.8                  #ความเร็วเชิงมุมของการหมุนไปที่ heading ของเส้นทาง rad/s
-      transform_tolerance: 0.2                            #ความคลาดเคลื่อนของการแปลงระหว่าง frame ของ robot กับ frame ของ goal ที่ต้องการไป m
-      min_approach_linear_velocity: 0.15                   #ความเร็วเชิงเส้นต่ำสุดที่ใช้เมื่อเข้าใกล้ goal m/s
-      approach_velocity_scaling_dist: 3.5                 #ระยะที่ใช้ในการปรับความเร็วเมื่อเข้าใกล้ goal m
-      use_collision_detection: false                       #ใช้การตรวจจับการชนหรือไม่
-      max_allowed_time_to_collision_up_to_carrot: 1.5     #เวลาในการฉายความเร็วเพื่อตรวจสอบการชนเมื่อ use_collision_detection เป็น true s จำกัดไว้ที่ระยะทางสูงสุดที่มองไปข้างหน้า
-      use_regulated_linear_velocity_scaling: true         #ใช้คุณสมบัติที่ได้รับการควบคุมสำหรับเส้นทางโค้งหรือไม่ เช่น ช้าบนทางโค้งสูง
-      use_cost_regulated_linear_velocity_scaling: true    #ใช้คุณสมบัติที่ได้รับการควบคุมเพื่อเข้าใกล้สิ่งกีดขวางหรือไม่
-      regulated_linear_scaling_min_radius: 0.5           #รัศมีวงเลี้ยว (m) ที่คุณสมบัติการควบคุมถูกเรียกใช้เมื่อ use_regulated_linear_velocity_scaling เป็นจริง จำไว้ว่าการหมุนที่คมมีรัศมีเล็กกว่า
-      regulated_linear_scaling_min_speed: 0.5             #ความเร็วต่ำสุด (m/s) ที่คุณสมบัติการควบคุมสามารถส่งได้เพื่อให้แน่ใจว่ากระบวนการยังสามารถทำได้แม้ในพื้นที่ที่มีความเสี่ยงสูงและมีเส้นโค้งสูง ต้อง > 0.1
-      use_fixed_curvature_lookahead: true                 #ใช้ lookahead_dist ในการคำนวณความโค้ง โดยที่ระยะที่มองไปข้างหน้าอาจถูกตั้งค่าให้เปลี่ยนไปตามความเร็ว มันสามารถนำเข้ารูปแบบการอ้างอิงที่อาจเป็นปัญหาสำหรับระยะที่มองไปข้างหน้าที่ใหญ่
-      curvature_lookahead_dist: 2.0                       #ระยะที่มองไปข้างหน้าบนเส้นทางเพื่อตรวจจับความโค้ง
-      allow_reversing: true                               #อนุญาตให้หุ่นยนต์ขับถอยหรือไม่ (เปิดใช้งานหุ่นยนต์ให้ขับถอยเมื่อเส้นทางที่วางแผนเกี่ยวข้องกับการถอยหลัง (ซึ่งถูกแทนด้วยการหมุนทิศทาง) หรือไม่)
-      use_rotate_to_heading: false                        #ใช้หมุนไปที่หัวเส้นทางและการหมุนของเป้าหมายเมื่อใช้ตัววางแผน holonomic แนะนำให้เปิดสำหรับประเภทหุ่นยนต์ทุกประเภทที่สามารถหมุนได้ (Note: ไม่สามารถตั้งค่า use_rotate_to_heading และ allow_reversing ให้เป็น true พร้อมกันได้เนื่องจากจะทำให้เกิดสถานการณ์ที่ไม่ชัดเจน)
-      rotate_to_heading_min_angle: 0.743                   #ความแตกต่างในการวางแผนทิศทางและการเริ่มต้นทิศทางของหุ่นยนต์ (เรเดียน) เพื่อเริ่มหมุนในที่เดียว ถ้า use_rotate_to_heading เป็นจริง
-      max_angular_accel: 3.2                              #ความเร่งมุมสูงสุดที่อนุญาต (rad/s/s) ในขณะที่หมุนไปที่หัวเส้นทาง, หาก use_rotate_to_heading เป็นจริง
-      max_robot_pose_search_dist: 10.0                    #do not change this value
-      interpolate_curvature_after_goal: false             #ปรับความโค้งหลังจากเส้นทางเป็นจุดหลักในการคำนวณความโค้ง (เพื่อหลีกเลี่ยงการสั่นสะเทือนที่ปลายเส้นทาง) สำหรับการแสดงผล จะถูกเผยแพร่บน /curvature_lookahead_point โดยเทียบเท่ากับ /lookahead_point
-      cost_scaling_dist: 0.45                             #ระยะทางขั้นต่ำจากสิ่งกีดขวางที่จะกระตุ้นการปรับขนาดของความเร็วเชิงเส้น หาก use_cost_regulated_linear_velocity_scaling เปิดใช้งาน ค่าที่ตั้งไว้ควรจะเล็กกว่าหรือเท่ากับค่า inflation_radius ที่ตั้งไว้ใน inflation layer of costmap เนื่องจาก inflation layer ใช้เพื่อคำนวณระยะทางจากสิ่งกีดขวาง
-      cost_scaling_gain: 0.5                              #ตัวคูณที่เพิ่มขึ้นซึ่งควร <= 1.0 ใช้เพื่อปรับขนาดความเร็วเพิ่มเติมเมื่อมีสิ่งกีดขวางอยู่ภายใน cost_scaling_dist ค่าที่ต่ำกว่าจะลดความเร็วลงได้เร็วขึ้น
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      # Rotation Shim เป็นตัวครอบ controller หลักอีกที
+      # หน้าที่คือ:
+      # 1) ถ้าทิศหน้าหุ่นยังไม่ตรงแนว path มากพอ -> หมุนก่อน
+      # 2) ถ้าตรงแนว path แล้ว -> ส่งงานให้ primary_controller ตาม path ต่อ
+
+      primary_controller: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      # controller หลักที่ใช้ตาม path หลังจาก shim จัด heading ให้แล้ว
+
+      # -----------------------------
+      # Rotation Shim settings
+      # -----------------------------
+      angular_dist_threshold: 0.174
+      # threshold ของ "มุมต่าง" ระหว่างหน้าหุ่นกับทิศของ path
+      # 0.174 rad ≈ 10 deg
+      # ถ้ามุมต่างมากกว่านี้ -> shim จะเลือกหมุนในที่ก่อน
+      # ถ้าน้อยกว่านี้ -> ส่งต่อให้ RPP ตาม path เลย
+      # ค่านี้ยิ่งเล็ก ยิ่งเข้มงวดเรื่องต้องหันตรง path ก่อน
+
+      forward_sampling_distance: 0.5
+      # ระยะที่ใช้มองไปข้างหน้าบน path เพื่อประเมิน heading ของ path
+      # ค่านี้มีผลกับทิศอ้างอิงที่ shim ใช้ตัดสินว่าจะต้องหมุนหรือยัง
+
+      rotate_to_heading_angular_vel: 0.5
+      # ความเร็วเชิงมุมตอน shim หมุนหุ่นเข้าหา path หรือ goal heading
+      # ค่ายิ่งมาก -> หมุนเร็วขึ้น แต่เสี่ยง overshoot และแกว่งมากขึ้น
+      # ของคุณตอนนี้ลดลงมาแล้ว ถือว่าเหมาะกับการลดอาการส่ายปลายทาง
+
+      max_angular_accel: 1.5
+      # ความเร่งเชิงมุมสูงสุดตอนหมุน
+      # ถ้าสูงเกินไป หุ่นจะกระชากและเลยมุมง่าย
+      # ถ้าต่ำเกินไป จะหมุนช้าแต่เนียนขึ้น
+
+      simulate_ahead_time: 1.0
+      # เวลาที่ใช้จำลองการหมุน/การเคลื่อนที่ล่วงหน้าเพื่อประเมินพฤติกรรม
+      # ใช้ช่วยให้การควบคุมมีความปลอดภัยและสมเหตุสมผลขึ้น
+
+      rotate_to_goal_heading: true
+      # เมื่อเข้าใกล้ goal ในเชิง XY แล้ว
+      # ให้ Rotation Shim "กลับมารับงานอีกครั้ง" เพื่อหมุนหุ่นให้ตรง goal heading
+      # ถ้า true = shim เป็นคนคุมการหมุนปลายทาง
+      # ถ้า false = shim ไม่ยุ่งกับการหมุนปลายทาง
+
+      use_path_orientations: false
+      # ถ้า false = ใช้ทิศทางจากรูปทรง path โดยรวม
+      # ถ้า true  = ใช้ orientation ของ pose บน path โดยตรง
+      # มักเปิด true เมื่อ planner ส่ง path ที่มี orientation ชัดเจนและต้องการใช้มันจริงๆ
+
+      # -----------------------------
+      # Regulated Pure Pursuit settings
+      # -----------------------------
+      desired_linear_vel: 0.5
+      # ความเร็วเชิงเส้นหลักที่อยากให้หุ่นวิ่ง
+      # ไม่ได้แปลว่าจะวิ่ง 0.5 ตลอดเวลา
+      # เพราะ RPP ยังอาจลดความเร็วจากโค้ง, obstacle, และช่วงเข้า goal
+
+      lookahead_dist: 0.6
+      # ระยะมองไปข้างหน้าบน path เพื่อเลือก carrot point
+      # ใช้ตรงๆ เมื่อ use_velocity_scaled_lookahead_dist = false
+      # ค่าน้อย -> เลี้ยวไว ตอบสนองไว แต่มีโอกาสแกว่ง
+      # ค่ามาก -> วิ่งนุ่มขึ้น แต่ตัดโค้งกว้างขึ้น
+
+      min_lookahead_dist: 0.3
+      # lookahead ต่ำสุดเมื่อใช้โหมด velocity-scaled
+      # มีผลจริงเมื่อ use_velocity_scaled_lookahead_dist = true
+
+      max_lookahead_dist: 0.9
+      # lookahead สูงสุดเมื่อใช้โหมด velocity-scaled
+      # มีผลจริงเมื่อ use_velocity_scaled_lookahead_dist = true
+
+      lookahead_time: 1.5
+      # เวลาที่ใช้คำนวณ lookahead แบบอิงความเร็ว
+      # มีผลจริงเมื่อ use_velocity_scaled_lookahead_dist = true
+
+      transform_tolerance: 0.1
+      # เวลาคลาดเคลื่อนที่ยอมรับได้ของ TF transform
+      # ถ้า TF เก่ากว่าค่านี้มาก อาจถูกมองว่าใช้ไม่ได้
+
+      use_velocity_scaled_lookahead_dist: false
+      # false = ใช้ lookahead_dist คงที่ตลอด
+      # true  = วิ่งเร็ว -> lookahead ไกลขึ้น, วิ่งช้า -> lookahead สั้นลง
+      # ตอนนี้คุณปิดไว้ ทำให้จูนง่ายและพฤติกรรมคงที่กว่า
+
+      min_approach_linear_velocity: 0.05
+      # ความเร็วเชิงเส้นต่ำสุดตอนใกล้ถึง goal
+      # ป้องกันไม่ให้หุ่นชะลอจนแทบไม่ขยับ
+      # ถ้าค่านี้สูงไป อาจดัน goal แล้วแกว่งปลายทางได้
+
+      approach_velocity_scaling_dist: 2.0
+      # เมื่อเหลือระยะถึง goal ประมาณนี้ จะเริ่มชะลอความเร็วลง
+      # ค่ายิ่งมาก -> เริ่มชะลอเร็วขึ้นจากระยะไกล
+      # ค่าปัจจุบัน 2.0 ถือว่าค่อนข้างเผื่อการชะลอเยอะ
+
+      use_collision_detection: true
+      # เปิด active collision detection
+      # RPP จะจำลอง trajectory ล่วงหน้าตามคำสั่งความเร็วปัจจุบัน
+      # แล้วตรวจว่าถ้าปล่อยให้ไปต่อจะชนหรือไม่
+
+      max_allowed_time_to_collision_up_to_carrot: 1.0
+      # เวลาสูงสุดที่ใช้จำลองไปข้างหน้าเพื่อตรวจชน
+      # ค่ายิ่งมาก = มองไกลล่วงหน้ามากขึ้น
+      # แต่อาจระวังมากเกินจนชะลอ/หยุดง่าย
+      # เอกสารอธิบายว่าระบบจะ project การเคลื่อนที่ไปข้างหน้าตามความเร็วปัจจุบัน
+      # แล้วตรวจ collision ในช่วงเวลานี้หรือก่อนถึง lookahead point :contentReference[oaicite:1]{index=1}
+
+      use_regulated_linear_velocity_scaling: true
+      # เปิดการลดความเร็วตามความโค้งของ path
+      # ถ้าทางโค้งมาก -> ช้าลง
+      # ช่วยลด overshoot และช่วยให้เข้าโค้งแม่นขึ้น
+
+      use_cost_regulated_linear_velocity_scaling: true
+      # เปิดการลดความเร็วตาม costmap
+      # ถ้าใกล้กำแพง/สิ่งกีดขวาง -> ช้าลง
+      # เหมาะกับทางแคบหรือวิ่งใกล้วัตถุบ่อย
+
+      regulated_linear_scaling_min_radius: 0.9
+      # ถ้ารัศมีเลี้ยวต่ำกว่าค่านี้
+      # ระบบจะเริ่มมองว่า "โค้งพอที่จะควรลดความเร็ว"
+      # ค่ายิ่งเล็ก -> ยอมให้โค้งมากโดยยังไม่ชะลอ
+      # ค่ายิ่งใหญ่ -> ชะลอเร็วขึ้นเมื่อเริ่มเข้าโค้ง
+
+      regulated_linear_scaling_min_speed: 0.25
+      # ความเร็วต่ำสุดที่ระบบยอมลดลงเมื่อใช้ regulation จากความโค้ง
+      # เป็นพื้นล่างของการชะลอจาก path curvature
+
+      use_fixed_curvature_lookahead: false
+      # false = ใช้ระบบ lookahead ปกติในการคำนวณ curvature
+      # true  = ใช้ระยะเฉพาะจาก curvature_lookahead_dist เพื่อดูความโค้ง
+      # มีประโยชน์เมื่ออยากแยก "ระยะมองเพื่อตาม path" ออกจาก "ระยะมองเพื่อประเมินความโค้ง"
+
+      curvature_lookahead_dist: 2.0
+      # ระยะที่ใช้ดู curvature เมื่อเปิด use_fixed_curvature_lookahead = true
+      # ตอนนี้ตั้งไว้แต่ยังไม่มีผล เพราะด้านบนเป็น false
+
+      use_rotate_to_heading: false
+      # ปิดการหมุนเข้าหา heading ของ RPP
+      # เพราะตอนนี้ให้ Rotation Shim เป็นคนรับหน้าที่หมุนแทน
+      # แบบนี้ช่วยลดการแย่งกันหมุนระหว่าง shim กับ RPP
+
+      rotate_to_heading_min_angle: 0.785
+      # ถ้าเปิด use_rotate_to_heading = true
+      # RPP จะเริ่มพิจารณาหมุนเมื่อมุมต่างเกินค่านี้
+      # ตอนนี้ยังเก็บไว้ได้ แต่ยังไม่มีผลเพราะปิดอยู่
+
+      max_robot_pose_search_dist: 10.0
+      # ระยะสูงสุดบน path ที่ controller จะค้นหาจุดที่ใกล้ robot ที่สุด
+      # ใช้จำกัดการค้นหา pose อ้างอิงบน path
+      # ค่าสูงช่วยให้รับ path ยาวได้ แต่ไม่ควรสูงเกินความจำเป็นมาก
+
+      interpolate_curvature_after_goal: false
+      # ใช้ช่วยประมาณ curvature หลัง goal เพื่อให้ปลายทางนิ่งขึ้น
+      # มีประโยชน์บางกรณี โดยเฉพาะร่วมกับ fixed curvature lookahead
+      # ตอนนี้ปิดไว้ก่อนเพื่อให้พฤติกรรมเรียบง่าย
+
+      cost_scaling_dist: 0.3
+      # ระยะจาก obstacle ที่เริ่มใช้ logic ลดความเร็วตาม costmap
+      # ควรสัมพันธ์กับ inflation radius ของ local costmap
+      # ถ้าตั้งใหญ่เกินไป หุ่นจะเริ่มชะลอตั้งแต่ยังไกล
+
+      cost_scaling_gain: 1.0
+      # ความแรงของการชะลอตาม cost
+      # โดยทั่วไปค่ายิ่งต่ำ -> ชะลอแรงขึ้น
+      # ค่ายิ่งสูง -> ชะลอน้อยลง
+      # ใช้คู่กับ cost_scaling_dist
+
+      inflation_cost_scaling_factor: 3.0
+      # ต้องสอดคล้องกับ inflation layer ใน local costmap
+      # RPP ใช้ค่านี้แปลง cost กลับไปเป็นระยะโดยประมาณ
+      # ถ้าค่านี้ไม่สัมพันธ์กับ costmap จริง พฤติกรรมชะลอใกล้วัตถุอาจเพี้ยนได้
 
 local_costmap:
   local_costmap:
@@ -217,46 +384,79 @@ global_costmap:
         inflation_radius: 0.45
       always_send_full_costmap: True
 
+# planner_server:
+#   ros__parameters:
+#     planner_plugins: ["GridBased"]
+#     use_sim_time: false
+#     GridBased:
+#       plugin: "nav2_smac_planner::SmacPlannerHybrid" # In Iron and older versions, "/" was used instead of "::"
+#       downsample_costmap: False           # whether or not to downsample the map
+#       downsampling_factor: 1              # multiplier for the resolution of the costmap layer (e.g. 2 on a 5cm costmap would be 10cm)
+#       tolerance: 0.2                     # dist-to-goal heuristic cost (distance) for valid tolerance endpoints if exact goal cannot be found.
+#       allow_unknown: False                # allow traveling in unknown space
+#       max_iterations: 1000000             # maximum total iterations to search for before failing (in case unreachable), set to -1 to disable
+#       max_on_approach_iterations: 1000    # Maximum number of iterations after within tolerances to continue to try to find exact solution
+#       max_planning_time: 5.0              # max time in s for planner to plan, smooth
+#       motion_model_for_search: "REEDS_SHEPP"    # Hybrid-A* DUBIN, REEDS_SHEPP
+#       angle_quantization_bins: 72         # Number of angle bins for search
+#       analytic_expansion_ratio: 3.5       # The ratio to attempt analytic expansions during search for final approach.
+#       analytic_expansion_max_length: 3.0  # For Hybrid/Lattice nodes: The maximum length of the analytic expansion to be considered valid to prevent unsafe shortcutting
+#       analytic_expansion_max_cost: 250.0  # The maximum single cost for any part of an analytic expansion to contain and be valid, except when necessary on approach to goal
+#       analytic_expansion_max_cost_override: False  #  Whether or not to override the maximum cost setting if within critical distance to goal (ie probably required)
+#       minimum_turning_radius: 0.5      # minimum turning radius in m of path / vehicle
+#       reverse_penalty: 2.0                # Penalty to apply if motion is reversing, must be => 1
+#       change_penalty: 0.0                 # Penalty to apply if motion is changing directions (L to R), must be >= 0
+#       non_straight_penalty: 1.2           # Penalty to apply if motion is non-straight, must be => 1
+#       cost_penalty: 2.0                   # Penalty to apply to higher cost areas when adding into the obstacle map dynamic programming distance expansion heuristic. This drives the robot more towards the center of passages. A value between 1.3 - 3.5 is reasonable.
+#       retrospective_penalty: 0.015
+#       lookup_table_size: 10.0             # Size of the dubin/reeds-sheep distance window to cache, in meters.
+#       cache_obstacle_heuristic: False     # Cache the obstacle map dynamic programming distance expansion heuristic between subsequent replannings of the same goal location. Dramatically speeds up replanning performance (40x) if costmap is largely static.
+#       debug_visualizations: False         # For Hybrid nodes: Whether to publish expansions on the /expansions topic as an array of poses (the orientation has no meaning) and the path's footprints on the /planned_footprints topic. WARNING: heavy to compute and to display, for debug only as it degrades the performance.
+#       use_quadratic_cost_penalty: False
+#       downsample_obstacle_heuristic: True
+#       allow_primitive_interpolation: False
+#       smooth_path: True                   # If true, does a simple and quick smoothing post-processing to the path
+
+#       smoother:
+#         max_iterations: 1000
+#         w_smooth: 0.3
+#         w_data: 0.2
+#         tolerance: 1.0e-10
+#         do_refinement: true
+#         refinement_num: 2
+
+# planner_server:
+#   ros__parameters:
+#     expected_planner_frequency: 20.0
+#     planner_plugins: ["GridBased"]
+#     costmap_update_timeout: 1.0
+#     GridBased:
+#       plugin: "nav2_navfn_planner::NavfnPlanner"
+#       tolerance: 0.5
+#       use_astar: false
+#       allow_unknown: true
+
 planner_server:
   ros__parameters:
     planner_plugins: ["GridBased"]
-    use_sim_time: false
-    GridBased:
-      plugin: "nav2_smac_planner::SmacPlannerHybrid" # In Iron and older versions, "/" was used instead of "::"
-      downsample_costmap: False           # whether or not to downsample the map
-      downsampling_factor: 1              # multiplier for the resolution of the costmap layer (e.g. 2 on a 5cm costmap would be 10cm)
-      tolerance: 0.2                     # dist-to-goal heuristic cost (distance) for valid tolerance endpoints if exact goal cannot be found.
-      allow_unknown: False                # allow traveling in unknown space
-      max_iterations: 1000000             # maximum total iterations to search for before failing (in case unreachable), set to -1 to disable
-      max_on_approach_iterations: 1000    # Maximum number of iterations after within tolerances to continue to try to find exact solution
-      max_planning_time: 5.0              # max time in s for planner to plan, smooth
-      motion_model_for_search: "REEDS_SHEPP"    # Hybrid-A* DUBIN, REEDS_SHEPP
-      angle_quantization_bins: 72         # Number of angle bins for search
-      analytic_expansion_ratio: 3.5       # The ratio to attempt analytic expansions during search for final approach.
-      analytic_expansion_max_length: 3.0  # For Hybrid/Lattice nodes: The maximum length of the analytic expansion to be considered valid to prevent unsafe shortcutting
-      analytic_expansion_max_cost: 250.0  # The maximum single cost for any part of an analytic expansion to contain and be valid, except when necessary on approach to goal
-      analytic_expansion_max_cost_override: False  #  Whether or not to override the maximum cost setting if within critical distance to goal (ie probably required)
-      minimum_turning_radius: 0.5      # minimum turning radius in m of path / vehicle
-      reverse_penalty: 2.0                # Penalty to apply if motion is reversing, must be => 1
-      change_penalty: 0.0                 # Penalty to apply if motion is changing directions (L to R), must be >= 0
-      non_straight_penalty: 1.2           # Penalty to apply if motion is non-straight, must be => 1
-      cost_penalty: 2.0                   # Penalty to apply to higher cost areas when adding into the obstacle map dynamic programming distance expansion heuristic. This drives the robot more towards the center of passages. A value between 1.3 - 3.5 is reasonable.
-      retrospective_penalty: 0.015
-      lookup_table_size: 10.0             # Size of the dubin/reeds-sheep distance window to cache, in meters.
-      cache_obstacle_heuristic: False     # Cache the obstacle map dynamic programming distance expansion heuristic between subsequent replannings of the same goal location. Dramatically speeds up replanning performance (40x) if costmap is largely static.
-      debug_visualizations: False         # For Hybrid nodes: Whether to publish expansions on the /expansions topic as an array of poses (the orientation has no meaning) and the path's footprints on the /planned_footprints topic. WARNING: heavy to compute and to display, for debug only as it degrades the performance.
-      use_quadratic_cost_penalty: False
-      downsample_obstacle_heuristic: True
-      allow_primitive_interpolation: False
-      smooth_path: True                   # If true, does a simple and quick smoothing post-processing to the path
+    use_sim_time: True
 
+    GridBased:
+      plugin: "nav2_smac_planner::SmacPlanner2D"
+      tolerance: 0.2
+      downsample_costmap: false
+      downsampling_factor: 1
+      allow_unknown: true
+      max_iterations: 1000000
+      max_on_approach_iterations: 1000
+      max_planning_time: 5.0
+      cost_travel_multiplier: 2.0
+      use_final_approach_orientation: false
       smoother:
         max_iterations: 1000
         w_smooth: 0.3
         w_data: 0.2
         tolerance: 1.0e-10
-        do_refinement: true
-        refinement_num: 2
 
 smoother_server:
   ros__parameters:
@@ -288,11 +488,16 @@ behavior_server:
     local_frame: odom
     global_frame: map
     robot_base_frame: base_footprint
-    transform_tolerance: 0.2 #0.1
-    simulate_ahead_time: 0.0 #2.0
-    max_rotational_vel: 0.0 #1.0
-    min_rotational_vel: 0.0 #0.4
-    rotational_acc_lim: 0.0 #3.2
+    # transform_tolerance: 0.2 #0.1
+    # simulate_ahead_time: 0.0 #2.0
+    # max_rotational_vel: 0.0 #1.0
+    # min_rotational_vel: 0.0 #0.4
+    # rotational_acc_lim: 0.0 #3.2
+    transform_tolerance: 0.1
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 1.0
+    min_rotational_vel: 0.4
+    rotational_acc_lim: 3.2
 
 waypoint_follower:
   ros__parameters:
@@ -311,13 +516,13 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: False
     feedback: "OPEN_LOOP"
-    max_velocity: [0.7, 0.0, 2.0]
-    min_velocity: [-0.56, 0.0, -2.0]
+    max_velocity: [0.5, 0.0, 2.0]
+    min_velocity: [-0.5, 0.0, -2.0]
     max_accel: [2.5, 0.0, 3.2]
     max_decel: [-2.5, 0.0, -3.2]
     odom_topic: "odom"
     odom_duration: 0.1
-    deadband_velocity: [0.05, 0.0, 0.0]
+    deadband_velocity: [0.0, 0.0, 0.0]
     velocity_timeout: 1.0
 
 collision_monitor:
