@@ -53,12 +53,12 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'use_gui',
-            default_value='true', # เป็นการเปิด joint_state_publisher_gui โดยค่าเริ่มต้น เพื่อดูการหมุ่นของข้อต่อ
+            default_value='false', # เป็นการเปิด joint_state_publisher_gui โดยค่าเริ่มต้น เพื่อดูการหมุ่นของข้อต่อ
             description='Start joint_state_publisher_gui'
         ),
         DeclareLaunchArgument(
             'use_rviz',
-            default_value='true', # เป็นการเปิด RViz2 โดยค่าเริ่มต้น เพื่อดูโมเดลหุ่นยนต์
+            default_value='false', # เป็นการเปิด RViz2 โดยค่าเริ่มต้น เพื่อดูโมเดลหุ่นยนต์
             description='Start RViz2'
         ),
         robot_state_publisher,
